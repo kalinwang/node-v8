@@ -305,7 +305,7 @@ RUNTIME_FUNCTION(Runtime_ObjectHasOwnProperty) {
 
     Maybe<bool> result =
         JSReceiver::HasOwnProperty(Handle<JSProxy>::cast(object), key);
-    if (!result.IsJust()) return isolate->heap()->exception();
+    if (result.IsNothing()) return isolate->heap()->exception();
     return isolate->heap()->ToBoolean(result.FromJust());
 
   } else if (object->IsString()) {
@@ -420,9 +420,8 @@ RUNTIME_FUNCTION(Runtime_InternalSetPrototype) {
       CHECK_EQ(*function_map, function->map());
     }
   }
-  MAYBE_RETURN(
-      JSReceiver::SetPrototype(obj, prototype, false, Object::THROW_ON_ERROR),
-      isolate->heap()->exception());
+  MAYBE_RETURN(JSReceiver::SetPrototype(obj, prototype, false, kThrowOnError),
+               isolate->heap()->exception());
   return *obj;
 }
 
@@ -440,6 +439,61 @@ RUNTIME_FUNCTION(Runtime_OptimizeObjectForAddingMultipleProperties) {
   return *object;
 }
 
+RUNTIME_FUNCTION(Runtime_ObjectValues) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, receiver, 0);
+
+  Handle<FixedArray> values;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, values,
+      JSReceiver::GetOwnValues(receiver, PropertyFilter::ENUMERABLE_STRINGS,
+                               true));
+  return *isolate->factory()->NewJSArrayWithElements(values);
+}
+
+RUNTIME_FUNCTION(Runtime_ObjectValuesSkipFastPath) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, receiver, 0);
+
+  Handle<FixedArray> value;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, value,
+      JSReceiver::GetOwnValues(receiver, PropertyFilter::ENUMERABLE_STRINGS,
+                               false));
+  return *isolate->factory()->NewJSArrayWithElements(value);
+}
+
+RUNTIME_FUNCTION(Runtime_ObjectEntries) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, receiver, 0);
+
+  Handle<FixedArray> entries;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, entries,
+      JSReceiver::GetOwnEntries(receiver, PropertyFilter::ENUMERABLE_STRINGS,
+                                true));
+  return *isolate->factory()->NewJSArrayWithElements(entries);
+}
+
+RUNTIME_FUNCTION(Runtime_ObjectEntriesSkipFastPath) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+
+  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, receiver, 0);
+
+  Handle<FixedArray> entries;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, entries,
+      JSReceiver::GetOwnEntries(receiver, PropertyFilter::ENUMERABLE_STRINGS,
+                                false));
+  return *isolate->factory()->NewJSArrayWithElements(entries);
+}
 
 RUNTIME_FUNCTION(Runtime_GetProperty) {
   HandleScope scope(isolate);
@@ -478,7 +532,7 @@ RUNTIME_FUNCTION(Runtime_AddNamedProperty) {
   DCHECK(!name->ToArrayIndex(&index));
   LookupIterator it(object, name, object, LookupIterator::OWN_SKIP_INTERCEPTOR);
   Maybe<PropertyAttributes> maybe = JSReceiver::GetPropertyAttributes(&it);
-  if (!maybe.IsJust()) return isolate->heap()->exception();
+  if (maybe.IsNothing()) return isolate->heap()->exception();
   DCHECK(!it.IsFound());
 #endif
 
@@ -504,7 +558,7 @@ RUNTIME_FUNCTION(Runtime_AddElement) {
   LookupIterator it(isolate, object, index, object,
                     LookupIterator::OWN_SKIP_INTERCEPTOR);
   Maybe<PropertyAttributes> maybe = JSReceiver::GetPropertyAttributes(&it);
-  if (!maybe.IsJust()) return isolate->heap()->exception();
+  if (maybe.IsNothing()) return isolate->heap()->exception();
   DCHECK(!it.IsFound());
 
   if (object->IsJSArray()) {
@@ -609,7 +663,7 @@ RUNTIME_FUNCTION(Runtime_HasProperty) {
 
   // Lookup the {name} on {receiver}.
   Maybe<bool> maybe = JSReceiver::HasProperty(receiver, name);
-  if (!maybe.IsJust()) return isolate->heap()->exception();
+  if (maybe.IsNothing()) return isolate->heap()->exception();
   return isolate->heap()->ToBoolean(maybe.FromJust());
 }
 
@@ -676,8 +730,8 @@ RUNTIME_FUNCTION(Runtime_NewObject) {
   RETURN_RESULT_OR_FAILURE(isolate, JSObject::New(target, new_target));
 }
 
-
-RUNTIME_FUNCTION(Runtime_FinalizeInstanceSize) {
+RUNTIME_FUNCTION(Runtime_CompleteInobjectSlackTrackingForMap) {
+  DisallowHeapAllocation no_gc;
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
 
@@ -693,7 +747,7 @@ RUNTIME_FUNCTION(Runtime_LoadMutableDouble) {
   DCHECK_EQ(2, args.length());
   CONVERT_ARG_HANDLE_CHECKED(JSObject, object, 0);
   CONVERT_ARG_HANDLE_CHECKED(Smi, index, 1);
-  CHECK((index->value() & 1) == 1);
+  CHECK_EQ(index->value() & 1, 1);
   FieldIndex field_index =
       FieldIndex::ForLoadByFieldIndex(object->map(), index->value());
   if (field_index.is_inobject()) {
@@ -810,9 +864,9 @@ RUNTIME_FUNCTION(Runtime_DefineDataPropertyInLiteral) {
       isolate, object, name, object, LookupIterator::OWN);
   // Cannot fail since this should only be called when
   // creating an object literal.
-  CHECK(JSObject::DefineOwnPropertyIgnoreAttributes(&it, value, attrs,
-                                                    Object::DONT_THROW)
-            .IsJust());
+  CHECK(
+      JSObject::DefineOwnPropertyIgnoreAttributes(&it, value, attrs, kDontThrow)
+          .IsJust());
   return *object;
 }
 
@@ -1020,7 +1074,7 @@ RUNTIME_FUNCTION(Runtime_DefineMethodsInternal) {
     }
 
     Maybe<bool> success = JSReceiver::DefineOwnProperty(
-        isolate, target, key, &descriptor, Object::DONT_THROW);
+        isolate, target, key, &descriptor, kDontThrow);
     CHECK(success.FromJust());
   }
   return isolate->heap()->undefined_value();
@@ -1049,14 +1103,11 @@ RUNTIME_FUNCTION(Runtime_DefineSetterPropertyUnchecked) {
   return isolate->heap()->undefined_value();
 }
 
-
 RUNTIME_FUNCTION(Runtime_ToObject) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(Object, object, 0);
-  RETURN_RESULT_OR_FAILURE(isolate, Object::ToObject(isolate, object));
+  // Runtime call is implemented in InterpreterIntrinsics and lowered in
+  // JSIntrinsicLowering.
+  UNREACHABLE();
 }
-
 
 RUNTIME_FUNCTION(Runtime_ToPrimitive) {
   HandleScope scope(isolate);
@@ -1081,6 +1132,12 @@ RUNTIME_FUNCTION(Runtime_ToNumber) {
   RETURN_RESULT_OR_FAILURE(isolate, Object::ToNumber(input));
 }
 
+RUNTIME_FUNCTION(Runtime_ToNumeric) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  CONVERT_ARG_HANDLE_CHECKED(Object, input, 0);
+  RETURN_RESULT_OR_FAILURE(isolate, Object::ToNumeric(input));
+}
 
 RUNTIME_FUNCTION(Runtime_ToInteger) {
   HandleScope scope(isolate);
@@ -1131,32 +1188,6 @@ RUNTIME_FUNCTION(Runtime_SameValueZero) {
   return isolate->heap()->ToBoolean(x->SameValueZero(y));
 }
 
-
-// TODO(bmeurer): Kill this special wrapper and use TF compatible LessThan,
-// GreaterThan, etc. which return true or false.
-RUNTIME_FUNCTION(Runtime_Compare) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(3, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(Object, x, 0);
-  CONVERT_ARG_HANDLE_CHECKED(Object, y, 1);
-  CONVERT_ARG_HANDLE_CHECKED(Object, ncr, 2);
-  Maybe<ComparisonResult> result = Object::Compare(x, y);
-  if (result.IsJust()) {
-    switch (result.FromJust()) {
-      case ComparisonResult::kLessThan:
-        return Smi::FromInt(LESS);
-      case ComparisonResult::kEqual:
-        return Smi::FromInt(EQUAL);
-      case ComparisonResult::kGreaterThan:
-        return Smi::FromInt(GREATER);
-      case ComparisonResult::kUndefined:
-        return *ncr;
-    }
-    UNREACHABLE();
-  }
-  return isolate->heap()->exception();
-}
-
 RUNTIME_FUNCTION(Runtime_HasInPrototypeChain) {
   HandleScope scope(isolate);
   DCHECK_EQ(2, args.length());
@@ -1189,9 +1220,8 @@ RUNTIME_FUNCTION(Runtime_CreateDataProperty) {
   LookupIterator it = LookupIterator::PropertyOrElement(
       isolate, o, key, &success, LookupIterator::OWN);
   if (!success) return isolate->heap()->exception();
-  MAYBE_RETURN(
-      JSReceiver::CreateDataProperty(&it, value, Object::THROW_ON_ERROR),
-      isolate->heap()->exception());
+  MAYBE_RETURN(JSReceiver::CreateDataProperty(&it, value, kThrowOnError),
+               isolate->heap()->exception());
   return *value;
 }
 
